@@ -1,0 +1,2957 @@
+\`\`\`typescript
+// app/dashboard/layout.tsx
+"use client"
+
+import { useRouter } from "next/navigation"
+import { useEffect } from "react"
+import { useClientUser } from "@/lib/auth"
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const { user, loading } = useClientUser()
+  const router = useRouter()
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push("/login")
+    }
+  }, [loading, user, router])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600 mx-auto"></div>
+          <p className="mt-2 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+  if (!user) return null
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      {/* Sidebar */}
+      <aside className="w-64 bg-white shadow-md">
+        {/* Sidebar Content */}
+        {children}
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 p-4">
+        {/* Your main content goes here */}
+        {children}
+      </main>
+    </div>
+  )
+}
+\`\`\`
+
+\`\`\`typescript
+// components/app-sidebar.tsx
+"use client"
+
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { LuLayoutDashboard, LuFilePlus, LuListChecks, LuCalendar, LuUsers, LuSettings, LuPower } from "react-icons/lu"
+import { getClientUser } from "@/lib/auth"
+
+interface SidebarItem {
+  label: string
+  href: string
+  icon: React.ComponentType
+  adminOnly?: boolean
+}
+
+const sidebarItems: SidebarItem[] = [
+  { label: "Dashboard", href: "/dashboard", icon: LuLayoutDashboard },
+  { label: "Sales", href: "/dashboard/sales", icon: LuFilePlus },
+  { label: "Expenses", href: "/dashboard/expenses", icon: LuListChecks },
+  { label: "Withholding Tax", href: "/dashboard/withholding", icon: LuCalendar },
+  { label: "Payroll", href: "/dashboard/payroll", icon: LuUsers, adminOnly: true },
+  { label: "SSNIT", href: "/dashboard/payroll/ssnit", icon: LuUsers, adminOnly: true },
+  { label: "Tier 2 & 3", href: "/dashboard/payroll/tier2-3", icon: LuUsers, adminOnly: true },
+  { label: "GRA", href: "/dashboard/gra/vat", icon: LuUsers, adminOnly: true },
+  { label: "GTA", href: "/dashboard/gta/tourism", icon: LuUsers, adminOnly: true },
+  { label: "Settings", href: "/dashboard/settings", icon: LuSettings, adminOnly: true },
+]
+
+const AppSidebar = () => {
+  const router = useRouter()
+  const [userData, setUserData] = useState<any>(null)
+
+  useEffect(() => {
+    setUserData(getClientUser())
+  }, [])
+
+  const handleLogout = () => {
+    localStorage.removeItem("token")
+    router.push("/login")
+  }
+
+  return (
+    <div className="p-4">
+      <h1 className="text-2xl font-bold mb-6">Acme Corp</h1>
+      <nav>
+        <ul>
+          {sidebarItems.map((item) => {
+            if (item.adminOnly && !userData?.isAdmin) return null
+            return (
+              <li key={item.label} className="mb-2">
+                <a
+                  href={item.href}
+                  className="flex items-center space-x-2 p-2 rounded-md hover:bg-gray-100 transition-colors duration-200"
+                >
+                  <item.icon className="h-5 w-5" />
+                  <span>{item.label}</span>
+                </a>
+              </li>
+            )
+          })}
+          <li className="mt-8">
+            <button
+              onClick={handleLogout}
+              className="flex items-center space-x-2 p-2 rounded-md hover:bg-gray-100 transition-colors duration-200"
+            >
+              <LuPower className="h-5 w-5" />
+              <span>Logout</span>
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </div>
+  )
+}
+
+export default AppSidebar
+\`\`\`
+
+\`\`\`typescript
+// hooks/use-toast.ts
+"use client"
+export * from "@/components/ui/use-toast"
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/withholding/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { WithholdingTaxForm } from "@/components/forms/withholding-tax-form"
+import { WithholdingTax } from "@/types"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MoreHorizontal } from 'lucide-react'
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { exportCSV } from "@/lib/csv"
+
+const WithholdingTaxPage = () => {
+  const [withholding, setWithholding] = useState<WithholdingTax[]>([])
+  const [search, setSearch] = useState("")
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedWithholding = localStorage.getItem("withholding")
+    if (storedWithholding) {
+      setWithholding(JSON.parse(storedWithholding))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("withholding", JSON.stringify(withholding))
+  }, [withholding])
+
+  const addWithholding = (newWithholding: WithholdingTax) => {
+    setWithholding([...withholding, newWithholding])
+    toast({
+      title: "Success",
+      description: "Withholding Tax added successfully.",
+    })
+  }
+
+  const updateWithholding = (id: string, updatedWithholding: WithholdingTax) => {
+    setWithholding(
+      withholding.map((w) => (w.id === id ? { ...updatedWithholding, id: w.id } : w))
+    )
+    toast({
+      title: "Success",
+      description: "Withholding Tax updated successfully.",
+    })
+  }
+
+  const deleteWithholding = (id: string) => {
+    setWithholding(withholding.filter((w) => w.id !== id))
+    toast({
+      title: "Success",
+      description: "Withholding Tax deleted successfully.",
+    })
+  }
+
+  const filteredWithholding = useMemo(() => {
+    return withholding.filter((w) => {
+      const searchTerm = search.toLowerCase()
+      const dateMatches =
+        !date?.from ||
+        !date?.to ||
+        (new Date(w.date) >= date.from && new Date(w.date) <= date.to)
+      return (
+        (w.businessName.toLowerCase().includes(searchTerm) ||
+          w.withholdingType.toLowerCase().includes(searchTerm)) &&
+        dateMatches
+      )
+    })
+  }, [withholding, search, date])
+
+  const sortedWithholding = useMemo(() => {
+    return [...filteredWithholding].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    )
+  }, [filteredWithholding])
+
+  const filteredAndSortedWithholding = useMemo(() => {
+    return sortedWithholding
+  }, [sortedWithholding])
+
+  const exportToCSV = () => {
+    const headers = ["Date", "Business Name", "Amount", "Withholding Type", "Withholding Amount"]
+    const rows = filteredAndSortedWithholding.map((w) => [
+      w.date,
+      w.businessName,
+      w.amount.toFixed(2),
+      w.withholdingType,
+      w.withholdingAmount.toFixed(2),
+    ])
+    exportCSV({
+      headers,
+      rows,
+      filename: `withholding-tax-log-${new Date().toISOString().split("T")[0]}.csv`,
+    })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">Withholding Tax</h1>
+        <WithholdingTaxForm addWithholding={addWithholding} />
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <Input
+          type="text"
+          placeholder="Search business name or withholding type..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={exportToCSV}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>A list of your withholding tax expenses.</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Business Name</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Withholding Type</TableHead>
+              <TableHead>Withholding Amount</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredAndSortedWithholding.map((w) => (
+              <TableRow key={w.id}>
+                <TableCell>{w.date}</TableCell>
+                <TableCell>{w.businessName}</TableCell>
+                <TableCell>{w.amount}</TableCell>
+                <TableCell>{w.withholdingType}</TableCell>
+                <TableCell>{w.withholdingAmount}</TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="h-8 w-8 p-0">
+                        <span className="sr-only">Open menu</span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const updatedBusinessName = prompt(
+                            "Enter new business name",
+                            w.businessName
+                          )
+                          if (updatedBusinessName) {
+                            const updatedAmount = prompt(
+                              "Enter new amount",
+                              w.amount.toString()
+                            )
+                            if (updatedAmount) {
+                              const updatedWithholdingType = prompt(
+                                "Enter new withholding type",
+                                w.withholdingType
+                              )
+                              if (updatedWithholdingType) {
+                                const updatedWithholdingAmount = prompt(
+                                  "Enter new withholding amount",
+                                  w.withholdingAmount.toString()
+                                )
+                                if (updatedWithholdingAmount) {
+                                  updateWithholding(w.id, {
+                                    date: w.date,
+                                    businessName: updatedBusinessName,
+                                    amount: parseFloat(updatedAmount),
+                                    withholdingType: updatedWithholdingType,
+                                    withholdingAmount: parseFloat(
+                                      updatedWithholdingAmount
+                                    ),
+                                  })
+                                }
+                              }
+                            }
+                          }
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => deleteWithholding(w.id)}>
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell colSpan={3}>Total</TableCell>
+              <TableCell>
+                {filteredAndSortedWithholding.reduce(
+                  (acc, w) => acc + w.amount,
+                  0
+                )}
+              </TableCell>
+              <TableCell>
+                {filteredAndSortedWithholding.reduce(
+                  (acc, w) => acc + w.withholdingAmount,
+                  0
+                )}
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default WithholdingTaxPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/expenses/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { ExpenseForm } from "@/components/forms/expense-form"
+import { Expense } from "@/types"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MoreHorizontal } from 'lucide-react'
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { exportCSV } from "@/lib/csv"
+
+const ExpensesPage = () => {
+  const [expenses, setExpenses] = useState<Expense[]>([])
+  const [search, setSearch] = useState("")
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedExpenses = localStorage.getItem("expenses")
+    if (storedExpenses) {
+      setExpenses(JSON.parse(storedExpenses))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("expenses", JSON.stringify(expenses))
+  }, [expenses])
+
+  const addExpense = (newExpense: Expense) => {
+    setExpenses([...expenses, newExpense])
+    toast({
+      title: "Success",
+      description: "Expense added successfully.",
+    })
+  }
+
+  const updateExpense = (id: string, updatedExpense: Expense) => {
+    setExpenses(
+      expenses.map((e) => (e.id === id ? { ...updatedExpense, id: e.id } : e))
+    )
+    toast({
+      title: "Success",
+      description: "Expense updated successfully.",
+    })
+  }
+
+  const deleteExpense = (id: string) => {
+    setExpenses(expenses.filter((e) => e.id !== id))
+    toast({
+      title: "Success",
+      description: "Expense deleted successfully.",
+    })
+  }
+
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((e) => {
+      const searchTerm = search.toLowerCase()
+      const dateMatches =
+        !date?.from ||
+        !date?.to ||
+        (new Date(e.date) >= date.from && new Date(e.date) <= date.to)
+      return (
+        (e.paymentDetails.toLowerCase().includes(searchTerm) ||
+          e.supplier.toLowerCase().includes(searchTerm) ||
+          e.category.toLowerCase().includes(searchTerm) ||
+          e.mop.toLowerCase().includes(searchTerm) ||
+          e.vatType.toLowerCase().includes(searchTerm)) &&
+        dateMatches
+      )
+    })
+  }, [expenses, search, date])
+
+  const sortedExpenses = useMemo(() => {
+    return [...filteredExpenses].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    )
+  }, [filteredExpenses])
+
+  const filteredAndSortedExpenses = useMemo(() => {
+    return sortedExpenses
+  }, [sortedExpenses])
+
+  const exportToCSV = () => {
+    const headers = ["Date","Payment Details","Supplier","Amount","Category","MOP","VAT Type","Withholding","Input VAT"]
+    const rows = filteredAndSortedExpenses.map((e) => [
+      e.date,
+      e.paymentDetails,
+      e.supplier,
+      e.amount.toFixed(2),
+      e.category,
+      e.mop.toUpperCase(),
+      e.vatType,
+      e.isWithholding ? `Yes (${e.withholdingType})` : "No",
+      e.inputVat.toFixed(2),
+    ])
+    exportCSV({
+      headers,
+      rows,
+      filename: `expenses-log-${new Date().toISOString().split("T")[0]}.csv`,
+    })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">Expenses</h1>
+        <ExpenseForm addExpense={addExpense} />
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <Input
+          type="text"
+          placeholder="Search payment details, supplier, category, MOP, or VAT type..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={exportToCSV}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>A list of your expenses.</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Payment Details</TableHead>
+              <TableHead>Supplier</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead>MOP</TableHead>
+              <TableHead>VAT Type</TableHead>
+              <TableHead>Withholding</TableHead>
+              <TableHead>Input VAT</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredAndSortedExpenses.map((e) => (
+              <TableRow key={e.id}>
+                <TableCell>{e.date}</TableCell>
+                <TableCell>{e.paymentDetails}</TableCell>
+                <TableCell>{e.supplier}</TableCell>
+                <TableCell>{e.amount}</TableCell>
+                <TableCell>{e.category}</TableCell>
+                <TableCell>{e.mop}</TableCell>
+                <TableCell>{e.vatType}</TableCell>
+                <TableCell>{e.isWithholding ? `Yes (${e.withholdingType})` : "No"}</TableCell>
+                <TableCell>{e.inputVat}</TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="h-8 w-8 p-0">
+                        <span className="sr-only">Open menu</span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const updatedPaymentDetails = prompt(
+                            "Enter new payment details",
+                            e.paymentDetails
+                          )
+                          if (updatedPaymentDetails) {
+                            const updatedSupplier = prompt("Enter new supplier", e.supplier)
+                            if (updatedSupplier) {
+                              const updatedAmount = prompt(
+                                "Enter new amount",
+                                e.amount.toString()
+                              )
+                              if (updatedAmount) {
+                                const updatedCategory = prompt(
+                                  "Enter new category",
+                                  e.category
+                                )
+                                if (updatedCategory) {
+                                  const updatedMop = prompt("Enter new MOP", e.mop)
+                                  if (updatedMop) {
+                                    const updatedVatType = prompt(
+                                      "Enter new VAT type",
+                                      e.vatType
+                                    )
+                                    if (updatedVatType) {
+                                      const updatedIsWithholding = confirm(
+                                        "Is withholding applicable?"
+                                      )
+                                      const updatedWithholdingType = updatedIsWithholding
+                                        ? prompt(
+                                            "Enter new withholding type",
+                                            e.withholdingType
+                                          )
+                                        : ""
+                                      const updatedInputVat = prompt(
+                                        "Enter new input VAT",
+                                        e.inputVat.toString()
+                                      )
+                                      if (updatedInputVat) {
+                                        updateExpense(e.id, {
+                                          date: e.date,
+                                          paymentDetails: updatedPaymentDetails,
+                                          supplier: updatedSupplier,
+                                          amount: parseFloat(updatedAmount),
+                                          category: updatedCategory,
+                                          mop: updatedMop,
+                                          vatType: updatedVatType,
+                                          isWithholding: updatedIsWithholding,
+                                          withholdingType: updatedWithholdingType || "",
+                                          inputVat: parseFloat(updatedInputVat),
+                                        })
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => deleteExpense(e.id)}>
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell colSpan={3}>Total</TableCell>
+              <TableCell>
+                {filteredAndSortedExpenses.reduce((acc, e) => acc + e.amount, 0)}
+              </TableCell>
+              <TableCell colSpan={5}></TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default ExpensesPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/sales/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { SalesForm } from "@/components/forms/sales-form"
+import { Sale } from "@/types"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MoreHorizontal } from 'lucide-react'
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { exportCSV } from "@/lib/csv"
+
+const SalesPage = () => {
+  const [sales, setSales] = useState<Sale[]>([])
+  const [search, setSearch] = useState("")
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedSales = localStorage.getItem("sales")
+    if (storedSales) {
+      setSales(JSON.parse(storedSales))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("sales", JSON.stringify(sales))
+  }, [sales])
+
+  const addSale = (newSale: Sale) => {
+    setSales([...sales, newSale])
+    toast({
+      title: "Success",
+      description: "Sale added successfully.",
+    })
+  }
+
+  const updateSale = (id: string, updatedSale: Sale) => {
+    setSales(sales.map((sale) => (sale.id === id ? { ...updatedSale, id: sale.id } : sale)))
+    toast({
+      title: "Success",
+      description: "Sale updated successfully.",
+    })
+  }
+
+  const deleteSale = (id: string) => {
+    setSales(sales.filter((sale) => sale.id !== id))
+    toast({
+      title: "Success",
+      description: "Sale deleted successfully.",
+    })
+  }
+
+  const filteredSales = useMemo(() => {
+    return sales.filter((sale) => {
+      const searchTerm = search.toLowerCase()
+      const dateMatches =
+        !date?.from ||
+        !date?.to ||
+        (new Date(sale.date) >= date.from && new Date(sale.date) <= date.to)
+      return (
+        (sale.customerName.toLowerCase().includes(searchTerm) ||
+          sale.serviceType.toLowerCase().includes(searchTerm)) &&
+        dateMatches
+      )
+    })
+  }, [sales, search, date])
+
+  const exportToCSV = () => {
+    const headers = ["Date","Customer","Service Type","Amount","VAT","NHIL","GETFUND","COVID","Tourism","Total"]
+    const rows = filteredSales.map((sale) => [
+      sale.date,
+      sale.customerName,
+      sale.serviceType,
+      sale.subtotal.toFixed(2),
+      sale.vatAmount.toFixed(2),
+      sale.nhilAmount.toFixed(2),
+      sale.getfundAmount.toFixed(2),
+      sale.covidAmount.toFixed(2),
+      sale.tourismAmount.toFixed(2),
+      sale.totalAmount.toFixed(2),
+    ])
+    exportCSV({
+      headers,
+      rows,
+      filename: `sales-${new Date().toISOString().split("T")[0]}.csv`,
+    })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">Sales</h1>
+        <SalesForm addSale={addSale} />
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <Input
+          type="text"
+          placeholder="Search customer or service type..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={exportToCSV}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>A list of your sales.</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Customer</TableHead>
+              <TableHead>Service Type</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>VAT</TableHead>
+              <TableHead>NHIL</TableHead>
+              <TableHead>GETFUND</TableHead>
+              <TableHead>COVID</TableHead>
+              <TableHead>Tourism</TableHead>
+              <TableHead>Total</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredSales.map((sale) => (
+              <TableRow key={sale.id}>
+                <TableCell>{sale.date}</TableCell>
+                <TableCell>{sale.customerName}</TableCell>
+                <TableCell>{sale.serviceType}</TableCell>
+                <TableCell>{sale.subtotal}</TableCell>
+                <TableCell>{sale.vatAmount}</TableCell>
+                <TableCell>{sale.nhilAmount}</TableCell>
+                <TableCell>{sale.getfundAmount}</TableCell>
+                <TableCell>{sale.covidAmount}</TableCell>
+                <TableCell>{sale.tourismAmount}</TableCell>
+                <TableCell>{sale.totalAmount}</TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="h-8 w-8 p-0">
+                        <span className="sr-only">Open menu</span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const updatedCustomerName = prompt(
+                            "Enter new customer name",
+                            sale.customerName
+                          )
+                          if (updatedCustomerName) {
+                            const updatedServiceType = prompt(
+                              "Enter new service type",
+                              sale.serviceType
+                            )
+                            if (updatedServiceType) {
+                              const updatedSubtotal = prompt(
+                                "Enter new amount",
+                                sale.subtotal.toString()
+                              )
+                              if (updatedSubtotal) {
+                                updateSale(sale.id, {
+                                  date: sale.date,
+                                  customerName: updatedCustomerName,
+                                  serviceType: updatedServiceType,
+                                  subtotal: parseFloat(updatedSubtotal),
+                                  vatRate: sale.vatRate,
+                                  nhilRate: sale.nhilRate,
+                                  getfundRate: sale.getfundRate,
+                                  covidRate: sale.covidRate,
+                                  tourismRate: sale.tourismRate,
+                                })
+                              }
+                            }
+                          }
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => deleteSale(sale.id)}>
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell colSpan={3}>Total</TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.subtotal, 0)}
+              </TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.vatAmount, 0)}
+              </TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.nhilAmount, 0)}
+              </TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.getfundAmount, 0)}
+              </TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.covidAmount, 0)}
+              </TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.tourismAmount, 0)}
+              </TableCell>
+              <TableCell>
+                {filteredSales.reduce((acc, sale) => acc + sale.totalAmount, 0)}
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default SalesPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/payroll/ssnit/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { SSNITContribution } from "@/types"
+import { faker } from "@faker-js/faker"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MoreHorizontal } from 'lucide-react'
+import { exportCSV } from "@/lib/csv"
+
+const generateFakeSSNITData = (count: number): SSNITContribution[] => {
+  return Array.from({ length: count }, (_, i) => ({
+    id: faker.string.uuid(),
+    sNo: i + 1,
+    ssnitNumber: faker.string.numeric({ length: 9 }),
+    niaNumber: faker.string.alphanumeric({ length: 16 }),
+    surname: faker.person.lastName(),
+    firstName: faker.person.firstName(),
+    otherName: faker.person.middleName(),
+    optionCode: faker.string.numeric({ length: 2 }),
+    hazardous: faker.datatype.boolean() ? "Y" : "N",
+    basicSalary: faker.number.float({ min: 500, max: 5000, precision: 2 }),
+    employeeContribution: faker.number.float({ min: 25, max: 250, precision: 2 }),
+    employerContribution: faker.number.float({ min: 75, max: 750, precision: 2 }),
+    totalContribution: faker.number.float({ min: 100, max: 1000, precision: 2 }),
+  }))
+}
+
+const SSNITPage = () => {
+  const [data, setData] = useState<SSNITContribution[]>([])
+  const [search, setSearch] = useState("")
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedData = localStorage.getItem("ssnitData")
+    if (storedData) {
+      setData(JSON.parse(storedData))
+    } else {
+      const fakeData = generateFakeSSNITData(10)
+      setData(fakeData)
+      localStorage.setItem("ssnitData", JSON.stringify(fakeData))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("ssnitData", JSON.stringify(data))
+  }, [data])
+
+  const updateData = (id: string, updatedData: SSNITContribution) => {
+    setData(
+      data.map((item) => (item.id === id ? { ...updatedData, id: item.id } : item))
+    )
+    toast({
+      title: "Success",
+      description: "SSNIT Contribution updated successfully.",
+    })
+  }
+
+  const deleteData = (id: string) => {
+    setData(data.filter((item) => item.id !== id))
+    toast({
+      title: "Success",
+      description: "SSNIT Contribution deleted successfully.",
+    })
+  }
+
+  const filteredData = useMemo(() => {
+    return data.filter((item) => {
+      const searchTerm = search.toLowerCase()
+      const dateMatches = true // No date on this form
+      return (
+        (item.surname.toLowerCase().includes(searchTerm) ||
+          item.firstName.toLowerCase().includes(searchTerm) ||
+          item.otherName.toLowerCase().includes(searchTerm) ||
+          item.ssnitNumber.toLowerCase().includes(searchTerm) ||
+          item.niaNumber.toLowerCase().includes(searchTerm)) &&
+        dateMatches
+      )
+    })
+  }, [data, search])
+
+  const sortedData = useMemo(() => {
+    return [...filteredData].sort((a, b) => a.sNo - b.sNo)
+  }, [filteredData])
+
+  const generateCSV = () => {
+    if (!sortedData || sortedData.length === 0) {
+      alert("No data to export.")
+      return
+    }
+    const headers = [
+      "S/NO.","SSNIT NUMBER","NIA NUMBER","SURNAME","FIRST NAME","OTHER NAME","OPTION CODE","HAZARDOUS (Y/N)",
+      "BASIC SALARY (GHS)","Employee Contribution (GHS)","Employer Contribution (GHS)","Total Contribution (GHS)",
+    ]
+    const rows = sortedData.map((row) => [
+      row.sNo,
+      row.ssnitNumber,
+      row.niaNumber,
+      row.surname,
+      row.firstName,
+      row.otherName,
+      row.optionCode,
+      row.hazardous,
+      row.basicSalary,
+      row.employeeContribution,
+      row.employerContribution,
+      row.totalContribution,
+    ])
+    exportCSV({ headers, rows, filename: "ssnit_contributions_report.csv" })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">SSNIT Contributions</h1>
+        <Button onClick={() => {
+          const fakeData = generateFakeSSNITData(10)
+          setData([...data, ...fakeData])
+        }}>Add Fake Data</Button>
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <Input
+          type="text"
+          placeholder="Search by name, SSNIT number, or NIA number..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={generateCSV}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>A list of SSNIT contributions.</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>S/NO.</TableHead>
+              <TableHead>SSNIT NUMBER</TableHead>
+              <TableHead>NIA NUMBER</TableHead>
+              <TableHead>SURNAME</TableHead>
+              <TableHead>FIRST NAME</TableHead>
+              <TableHead>OTHER NAME</TableHead>
+              <TableHead>OPTION CODE</TableHead>
+              <TableHead>HAZARDOUS (Y/N)</TableHead>
+              <TableHead>BASIC SALARY (GHS)</TableHead>
+              <TableHead>Employee Contribution (GHS)</TableHead>
+              <TableHead>Employer Contribution (GHS)</TableHead>
+              <TableHead>Total Contribution (GHS)</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedData.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell>{item.sNo}</TableCell>
+                <TableCell>{item.ssnitNumber}</TableCell>
+                <TableCell>{item.niaNumber}</TableCell>
+                <TableCell>{item.surname}</TableCell>
+                <TableCell>{item.firstName}</TableCell>
+                <TableCell>{item.otherName}</TableCell>
+                <TableCell>{item.optionCode}</TableCell>
+                <TableCell>{item.hazardous}</TableCell>
+                <TableCell>{item.basicSalary}</TableCell>
+                <TableCell>{item.employeeContribution}</TableCell>
+                <TableCell>{item.employerContribution}</TableCell>
+                <TableCell>{item.totalContribution}</TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="h-8 w-8 p-0">
+                        <span className="sr-only">Open menu</span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const updatedSsnitNumber = prompt(
+                            "Enter new SSNIT number",
+                            item.ssnitNumber
+                          )
+                          if (updatedSsnitNumber) {
+                            const updatedNiaNumber = prompt(
+                              "Enter new NIA number",
+                              item.niaNumber
+                            )
+                            if (updatedNiaNumber) {
+                              const updatedSurname = prompt(
+                                "Enter new surname",
+                                item.surname
+                              )
+                              if (updatedSurname) {
+                                const updatedFirstName = prompt(
+                                  "Enter new first name",
+                                  item.firstName
+                                )
+                                if (updatedFirstName) {
+                                  const updatedOtherName = prompt(
+                                    "Enter new other name",
+                                    item.otherName
+                                  )
+                                  if (updatedOtherName) {
+                                    const updatedOptionCode = prompt(
+                                      "Enter new option code",
+                                      item.optionCode
+                                    )
+                                    if (updatedOptionCode) {
+                                      const updatedHazardous = prompt(
+                                        "Enter new hazardous (Y/N)",
+                                        item.hazardous
+                                      )
+                                      if (updatedHazardous) {
+                                        const updatedBasicSalary = prompt(
+                                          "Enter new basic salary",
+                                          item.basicSalary.toString()
+                                        )
+                                        if (updatedBasicSalary) {
+                                          const updatedEmployeeContribution = prompt(
+                                            "Enter new employee contribution",
+                                            item.employeeContribution.toString()
+                                          )
+                                          if (updatedEmployeeContribution) {
+                                            const updatedEmployerContribution = prompt(
+                                              "Enter new employer contribution",
+                                              item.employerContribution.toString()
+                                            )
+                                            if (updatedEmployerContribution) {
+                                              const updatedTotalContribution = prompt(
+                                                "Enter new total contribution",
+                                                item.totalContribution.toString()
+                                              )
+                                              if (updatedTotalContribution) {
+                                                updateData(item.id, {
+                                                  sNo: item.sNo,
+                                                  ssnitNumber: updatedSsnitNumber,
+                                                  niaNumber: updatedNiaNumber,
+                                                  surname: updatedSurname,
+                                                  firstName: updatedFirstName,
+                                                  otherName: updatedOtherName,
+                                                  optionCode: updatedOptionCode,
+                                                  hazardous: updatedHazardous,
+                                                  basicSalary: parseFloat(
+                                                    updatedBasicSalary
+                                                  ),
+                                                  employeeContribution:
+                                                    parseFloat(
+                                                      updatedEmployeeContribution
+                                                    ),
+                                                  employerContribution:
+                                                    parseFloat(
+                                                      updatedEmployerContribution
+                                                    ),
+                                                  totalContribution:
+                                                    parseFloat(
+                                                      updatedTotalContribution
+                                                    ),
+                                                })
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => deleteData(item.id)}>
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default SSNITPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/payroll/tier2-3/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { Tier23Contribution } from "@/types"
+import { faker } from "@faker-js/faker"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MoreHorizontal } from 'lucide-react'
+import { exportCSV } from "@/lib/csv"
+
+const generateFakeTier23Data = (count: number): Tier23Contribution[] => {
+  return Array.from({ length: count }, (_, i) => ({
+    id: faker.string.uuid(),
+    staffNumber: faker.string.numeric({ length: 5 }),
+    employeeName: faker.person.fullName(),
+    monthlyBasic: faker.number.float({ min: 500, max: 5000, precision: 2 }),
+    memberId: faker.string.alphanumeric({ length: 10 }),
+    ssnitNumber: faker.string.numeric({ length: 9 }),
+    dateOfBirth: faker.date.birthdate().toISOString().slice(0, 10),
+    cellphoneNumber: faker.phone.number(),
+    ghanaNationalCardNumber: faker.string.alphanumeric({ length: 16 }),
+    tier2MonthlyContribution: faker.number.float({ min: 25, max: 250, precision: 2 }),
+    tier3EeContribution: faker.number.float({ min: 10, max: 100, precision: 2 }),
+    tier3ErContribution: faker.number.float({ min: 15, max: 150, precision: 2 }),
+    totalTierContribution: faker.number.float({ min: 50, max: 500, precision: 2 }),
+  }))
+}
+
+const Tier23Page = () => {
+  const [data, setData] = useState<Tier23Contribution[]>([])
+  const [search, setSearch] = useState("")
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedData = localStorage.getItem("tier23Data")
+    if (storedData) {
+      setData(JSON.parse(storedData))
+    } else {
+      const fakeData = generateFakeTier23Data(10)
+      setData(fakeData)
+      localStorage.setItem("tier23Data", JSON.stringify(fakeData))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("tier23Data", JSON.stringify(data))
+  }, [data])
+
+  const updateData = (id: string, updatedData: Tier23Contribution) => {
+    setData(
+      data.map((item) => (item.id === id ? { ...updatedData, id: item.id } : item))
+    )
+    toast({
+      title: "Success",
+      description: "Tier 2 & 3 Contribution updated successfully.",
+    })
+  }
+
+  const deleteData = (id: string) => {
+    setData(data.filter((item) => item.id !== id))
+    toast({
+      title: "Success",
+      description: "Tier 2 & 3 Contribution deleted successfully.",
+    })
+  }
+
+  const filteredData = useMemo(() => {
+    return data.filter((item) => {
+      const searchTerm = search.toLowerCase()
+      const dateMatches = true // No date on this form
+      return (
+        (item.employeeName.toLowerCase().includes(searchTerm) ||
+          item.staffNumber.toLowerCase().includes(searchTerm) ||
+          item.memberId.toLowerCase().includes(searchTerm) ||
+          item.ssnitNumber.toLowerCase().includes(searchTerm) ||
+          item.ghanaNationalCardNumber.toLowerCase().includes(searchTerm)) &&
+        dateMatches
+      )
+    })
+  }, [data, search])
+
+  const sortedData = useMemo(() => {
+    return [...filteredData].sort((a, b) => a.staffNumber.localeCompare(b.staffNumber))
+  }, [filteredData])
+
+  const generateCSV = () => {
+    if (!sortedData || sortedData.length === 0) {
+      alert("No data to export.")
+      return
+    }
+    const headers = [
+      "STAFF NUMBER","EMPLOYEE NAME","MONTHLY BASIC (GHS)","MEMBER ID","SSNIT NUMBER","DATE OF BIRTH",
+      "CELLPHONE NUMBER","GHANA NATIONAL CARD NUMBER","TIER 2 5% MONTHLY BASIC CONTRIBUTION (GHS)",
+      "TIER 3 EE BASIC CONTRIBUTION (GHS)","TIER 3 ER BASIC CONTRIBUTION (GHS)","TOTAL TIER CONTRIBUTION (GHS)",
+    ]
+    const rows = sortedData.map((row) => [
+      row.staffNumber,
+      row.employeeName,
+      row.monthlyBasic,
+      row.memberId,
+      row.ssnitNumber,
+      row.dateOfBirth,
+      row.cellphoneNumber,
+      row.ghanaNationalCardNumber,
+      row.tier2MonthlyContribution,
+      row.tier3EeContribution,
+      row.tier3ErContribution,
+      row.totalTierContribution,
+    ])
+    exportCSV({ headers, rows, filename: "tier_2_3_contributions_report.csv" })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">Tier 2 & 3 Contributions</h1>
+        <Button onClick={() => {
+          const fakeData = generateFakeTier23Data(10)
+          setData([...data, ...fakeData])
+        }}>Add Fake Data</Button>
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <Input
+          type="text"
+          placeholder="Search by name, staff number, member ID, SSNIT number, or Ghana Card number..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={generateCSV}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>A list of Tier 2 & 3 contributions.</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>STAFF NUMBER</TableHead>
+              <TableHead>EMPLOYEE NAME</TableHead>
+              <TableHead>MONTHLY BASIC (GHS)</TableHead>
+              <TableHead>MEMBER ID</TableHead>
+              <TableHead>SSNIT NUMBER</TableHead>
+              <TableHead>DATE OF BIRTH</TableHead>
+              <TableHead>CELLPHONE NUMBER</TableHead>
+              <TableHead>GHANA NATIONAL CARD NUMBER</TableHead>
+              <TableHead>TIER 2 5% MONTHLY BASIC CONTRIBUTION (GHS)</TableHead>
+              <TableHead>TIER 3 EE BASIC CONTRIBUTION (GHS)</TableHead>
+              <TableHead>TIER 3 ER BASIC CONTRIBUTION (GHS)</TableHead>
+              <TableHead>TOTAL TIER CONTRIBUTION (GHS)</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedData.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell>{item.staffNumber}</TableCell>
+                <TableCell>{item.employeeName}</TableCell>
+                <TableCell>{item.monthlyBasic}</TableCell>
+                <TableCell>{item.memberId}</TableCell>
+                <TableCell>{item.ssnitNumber}</TableCell>
+                <TableCell>{item.dateOfBirth}</TableCell>
+                <TableCell>{item.cellphoneNumber}</TableCell>
+                <TableCell>{item.ghanaNationalCardNumber}</TableCell>
+                <TableCell>{item.tier2MonthlyContribution}</TableCell>
+                <TableCell>{item.tier3EeContribution}</TableCell>
+                <TableCell>{item.tier3ErContribution}</TableCell>
+                <TableCell>{item.totalTierContribution}</TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="h-8 w-8 p-0">
+                        <span className="sr-only">Open menu</span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const updatedStaffNumber = prompt(
+                            "Enter new staff number",
+                            item.staffNumber
+                          )
+                          if (updatedStaffNumber) {
+                            const updatedEmployeeName = prompt(
+                              "Enter new employee name",
+                              item.employeeName
+                            )
+                            if (updatedEmployeeName) {
+                              const updatedMonthlyBasic = prompt(
+                                "Enter new monthly basic",
+                                item.monthlyBasic.toString()
+                              )
+                              if (updatedMonthlyBasic) {
+                                const updatedMemberId = prompt(
+                                  "Enter new member ID",
+                                  item.memberId
+                                )
+                                if (updatedMemberId) {
+                                  const updatedSsnitNumber = prompt(
+                                    "Enter new SSNIT number",
+                                    item.ssnitNumber
+                                  )
+                                  if (updatedSsnitNumber) {
+                                    const updatedDateOfBirth = prompt(
+                                      "Enter new date of birth",
+                                      item.dateOfBirth
+                                    )
+                                    if (updatedDateOfBirth) {
+                                      const updatedCellphoneNumber = prompt(
+                                        "Enter new cellphone number",
+                                        item.cellphoneNumber
+                                      )
+                                      if (updatedCellphoneNumber) {
+                                        const updatedGhanaNationalCardNumber = prompt(
+                                          "Enter new Ghana National Card number",
+                                          item.ghanaNationalCardNumber
+                                        )
+                                        if (updatedGhanaNationalCardNumber) {
+                                          const updatedTier2MonthlyContribution = prompt(
+                                            "Enter new Tier 2 monthly contribution",
+                                            item.tier2MonthlyContribution.toString()
+                                          )
+                                          if (updatedTier2MonthlyContribution) {
+                                            const updatedTier3EeContribution = prompt(
+                                              "Enter new Tier 3 EE contribution",
+                                              item.tier3EeContribution.toString()
+                                            )
+                                            if (updatedTier3EeContribution) {
+                                              const updatedTier3ErContribution = prompt(
+                                                "Enter new Tier 3 ER contribution",
+                                                item.tier3ErContribution.toString()
+                                              )
+                                              if (updatedTier3ErContribution) {
+                                                const updatedTotalTierContribution = prompt(
+                                                  "Enter new total tier contribution",
+                                                  item.totalTierContribution.toString()
+                                                )
+                                                if (updatedTotalTierContribution) {
+                                                  updateData(item.id, {
+                                                    staffNumber: updatedStaffNumber,
+                                                    employeeName: updatedEmployeeName,
+                                                    monthlyBasic: parseFloat(
+                                                      updatedMonthlyBasic
+                                                    ),
+                                                    memberId: updatedMemberId,
+                                                    ssnitNumber: updatedSsnitNumber,
+                                                    dateOfBirth: updatedDateOfBirth,
+                                                    cellphoneNumber:
+                                                      updatedCellphoneNumber,
+                                                    ghanaNationalCardNumber:
+                                                      updatedGhanaNationalCardNumber,
+                                                    tier2MonthlyContribution:
+                                                      parseFloat(
+                                                        updatedTier2MonthlyContribution
+                                                      ),
+                                                    tier3EeContribution:
+                                                      parseFloat(
+                                                        updatedTier3EeContribution
+                                                      ),
+                                                    tier3ErContribution:
+                                                      parseFloat(
+                                                        updatedTier3ErContribution
+                                                      ),
+                                                    totalTierContribution:
+                                                      parseFloat(
+                                                        updatedTotalTierContribution
+                                                      ),
+                                                  })
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => deleteData(item.id)}>
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default Tier23Page
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/payroll/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { PayrollEntry } from "@/types"
+import { faker } from "@faker-js/faker"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MoreHorizontal } from 'lucide-react'
+import { exportCSV } from "@/lib/csv"
+
+const generateFakePayrollData = (count: number): PayrollEntry[] => {
+  return Array.from({ length: count }, (_, i) => ({
+    id: faker.string.uuid(),
+    serNo: i + 1,
+    staffNo: faker.string.numeric({ length: 5 }),
+    tinGhCardNo: faker.string.alphanumeric({ length: 10 }),
+    nameOfEmployee: faker.person.fullName(),
+    position: faker.person.jobType(),
+    jobTitle: faker.person.jobTitle(),
+    nationality: faker.location.country(),
+    residency: faker.location.country(),
+    basicSalary: faker.number.float({ min: 500, max: 5000, precision: 2 }),
+    allowance: faker.number.float({ min: 100, max: 1000, precision: 2 }),
+    otherBenefits: faker.number.float({ min: 50, max: 500, precision: 2 }),
+    grossIncome: faker.number.float({ min: 650, max: 6500, precision: 2 }),
+    secondaryEmployment: faker.datatype.boolean() ? "Y" : "N",
+    employeeSSNITContribution: faker.number.float({ min: 25, max: 250, precision: 2 }),
+    tier2Contribution: faker.number.float({ min: 10, max: 100, precision: 2 }),
+    tier3EEContribution: faker.number.float({ min: 15, max: 150, precision: 2 }),
+    incomeTaxPayable: faker.number.float({ min: 50, max: 500, precision: 2 }),
+    totalDeductions: faker.number.float({ min: 100, max: 1000, precision: 2 }),
+    netPay: faker.number.float({ min: 550, max: 5500, precision: 2 }),
+  }))
+}
+
+const PayrollPage = () => {
+  const [data, setData] = useState<PayrollEntry[]>([])
+  const [search, setSearch] = useState("")
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedData = localStorage.getItem("payrollData")
+    if (storedData) {
+      setData(JSON.parse(storedData))
+    } else {
+      const fakeData = generateFakePayrollData(10)
+      setData(fakeData)
+      localStorage.setItem("payrollData", JSON.stringify(fakeData))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("payrollData", JSON.stringify(data))
+  }, [data])
+
+  const updateData = (id: string, updatedData: PayrollEntry) => {
+    setData(
+      data.map((item) => (item.id === id ? { ...updatedData, id: item.id } : item))
+    )
+    toast({
+      title: "Success",
+      description: "Payroll entry updated successfully.",
+    })
+  }
+
+  const deleteData = (id: string) => {
+    setData(data.filter((item) => item.id !== id))
+    toast({
+      title: "Success",
+      description: "Payroll entry deleted successfully.",
+    })
+  }
+
+  const filteredData = useMemo(() => {
+    return data.filter((item) => {
+      const searchTerm = search.toLowerCase()
+      const dateMatches = true // No date on this form
+      return (
+        (item.nameOfEmployee.toLowerCase().includes(searchTerm) ||
+          item.staffNo.toLowerCase().includes(searchTerm) ||
+          item.tinGhCardNo.toLowerCase().includes(searchTerm) ||
+          item.position.toLowerCase().includes(searchTerm) ||
+          item.jobTitle.toLowerCase().includes(searchTerm)) &&
+        dateMatches
+      )
+    })
+  }, [data, search])
+
+  const sortedData = useMemo(() => {
+    return [...filteredData].sort((a, b) => a.staffNo.localeCompare(b.staffNo))
+  }, [filteredData])
+
+  const generateCSV = () => {
+    if (!sortedData || sortedData.length === 0) {
+      alert("No data to export.")
+      return
+    }
+    const companyInfo = JSON.parse(localStorage.getItem("companyInfo") || "{}")
+    const prefaceLines = [
+      `"${companyInfo.name || "Company Name"}"`,
+      `"${companyInfo.address || "Company Address"}"`,
+      `"${[companyInfo.city || "", companyInfo.region || "", companyInfo.postalCode || ""].filter(Boolean).join(", ")}"`,
+      `"Phone: ${companyInfo.phone || "N/A"} | Email: ${companyInfo.email || "N/A"}"`,
+      `"TIN: ${companyInfo.taxId || "N/A"}"`,
+      `"Payroll Report - Generated on: ${new Date().toLocaleString()}"`,
+    ]
+    const headers = [
+      "Ser. No","Staff No.","TIN / GH. CARD NO.","Name Of Employee","Position","Job Title","Nationality","Residency",
+      "Basic Salary (GHS)","Allowance (GHS)","Other Benefits (GHS)","Gross Income (GHS)",
+      "Secondary Employment (Y/N)","Employee SSNIT (GHS)","Tier 2 Contribution (GHS)","Employee Tier 3 (GHS)",
+      "Income Tax Payable (GHS)","Total Deductions (GHS)","Net Pay (GHS)",
+    ]
+    const rows = sortedData.map((row) => [
+      row.serNo,
+      row.staffNo,
+      row.tinGhCardNo,
+      row.nameOfEmployee,
+      row.position,
+      row.jobTitle,
+      row.nationality,
+      row.residency,
+      row.basicSalary,
+      row.allowance,
+      row.otherBenefits,
+      row.grossIncome,
+      row.secondaryEmployment,
+      row.employeeSSNITContribution,
+      row.tier2Contribution,
+      row.tier3EEContribution,
+      row.incomeTaxPayable,
+      row.totalDeductions,
+      row.netPay,
+    ])
+    exportCSV({
+      headers,
+      rows,
+      prefaceLines,
+      filename: `payroll_paye_report_${new Date().toISOString().slice(0, 10)}.csv`,
+    })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">Payroll</h1>
+        <Button onClick={() => {
+          const fakeData = generateFakePayrollData(10)
+          setData([...data, ...fakeData])
+        }}>Add Fake Data</Button>
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <Input
+          type="text"
+          placeholder="Search by name, staff number, TIN, position, or job title..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={generateCSV}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>A list of payroll entries.</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Ser. No</TableHead>
+              <TableHead>Staff No.</TableHead>
+              <TableHead>TIN / GH. CARD NO.</TableHead>
+              <TableHead>Name Of Employee</TableHead>
+              <TableHead>Position</TableHead>
+              <TableHead>Job Title</TableHead>
+              <TableHead>Nationality</TableHead>
+              <TableHead>Residency</TableHead>
+              <TableHead>Basic Salary (GHS)</TableHead>
+              <TableHead>Allowance (GHS)</TableHead>
+              <TableHead>Other Benefits (GHS)</TableHead>
+              <TableHead>Gross Income (GHS)</TableHead>
+              <TableHead>Secondary Employment (Y/N)</TableHead>
+              <TableHead>Employee SSNIT (GHS)</TableHead>
+              <TableHead>Tier 2 Contribution (GHS)</TableHead>
+              <TableHead>Employee Tier 3 (GHS)</TableHead>
+              <TableHead>Income Tax Payable (GHS)</TableHead>
+              <TableHead>Total Deductions (GHS)</TableHead>
+              <TableHead>Net Pay (GHS)</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedData.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell>{item.serNo}</TableCell>
+                <TableCell>{item.staffNo}</TableCell>
+                <TableCell>{item.tinGhCardNo}</TableCell>
+                <TableCell>{item.nameOfEmployee}</TableCell>
+                <TableCell>{item.position}</TableCell>
+                <TableCell>{item.jobTitle}</TableCell>
+                <TableCell>{item.nationality}</TableCell>
+                <TableCell>{item.residency}</TableCell>
+                <TableCell>{item.basicSalary}</TableCell>
+                <TableCell>{item.allowance}</TableCell>
+                <TableCell>{item.otherBenefits}</TableCell>
+                <TableCell>{item.grossIncome}</TableCell>
+                <TableCell>{item.secondaryEmployment}</TableCell>
+                <TableCell>{item.employeeSSNITContribution}</TableCell>
+                <TableCell>{item.tier2Contribution}</TableCell>
+                <TableCell>{item.tier3EEContribution}</TableCell>
+                <TableCell>{item.incomeTaxPayable}</TableCell>
+                <TableCell>{item.totalDeductions}</TableCell>
+                <TableCell>{item.netPay}</TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="h-8 w-8 p-0">
+                        <span className="sr-only">Open menu</span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const updatedStaffNo = prompt(
+                            "Enter new staff number",
+                            item.staffNo
+                          )
+                          if (updatedStaffNo) {
+                            const updatedTinGhCardNo = prompt(
+                              "Enter new TIN/Ghana Card number",
+                              item.tinGhCardNo
+                            )
+                            if (updatedTinGhCardNo) {
+                              const updatedNameOfEmployee = prompt(
+                                "Enter new name of employee",
+                                item.nameOfEmployee
+                              )
+                              if (updatedNameOfEmployee) {
+                                const updatedPosition = prompt(
+                                  "Enter new position",
+                                  item.position
+                                )
+                                if (updatedPosition) {
+                                  const updatedJobTitle = prompt(
+                                    "Enter new job title",
+                                    item.jobTitle
+                                  )
+                                  if (updatedJobTitle) {
+                                    const updatedNationality = prompt(
+                                      "Enter new nationality",
+                                      item.nationality
+                                    )
+                                    if (updatedNationality) {
+                                      const updatedResidency = prompt(
+                                        "Enter new residency",
+                                        item.residency
+                                      )
+                                      if (updatedResidency) {
+                                        const updatedBasicSalary = prompt(
+                                          "Enter new basic salary",
+                                          item.basicSalary.toString()
+                                        )
+                                        if (updatedBasicSalary) {
+                                          const updatedAllowance = prompt(
+                                            "Enter new allowance",
+                                            item.allowance.toString()
+                                          )
+                                          if (updatedAllowance) {
+                                            const updatedOtherBenefits = prompt(
+                                              "Enter new other benefits",
+                                              item.otherBenefits.toString()
+                                            )
+                                            if (updatedOtherBenefits) {
+                                              const updatedGrossIncome = prompt(
+                                                "Enter new gross income",
+                                                item.grossIncome.toString()
+                                              )
+                                              if (updatedGrossIncome) {
+                                                const updatedSecondaryEmployment = prompt(
+                                                  "Enter new secondary employment (Y/N)",
+                                                  item.secondaryEmployment
+                                                )
+                                                if (updatedSecondaryEmployment) {
+                                                  const updatedEmployeeSSNITContribution = prompt(
+                                                    "Enter new employee SSNIT contribution",
+                                                    item.employeeSSNITContribution.toString()
+                                                  )
+                                                  if (updatedEmployeeSSNITContribution) {
+                                                    const updatedTier2Contribution = prompt(
+                                                      "Enter new Tier 2 contribution",
+                                                      item.tier2Contribution.toString()
+                                                    )
+                                                    if (updatedTier2Contribution) {
+                                                      const updatedTier3EEContribution = prompt(
+                                                        "Enter new Tier 3 EE contribution",
+                                                        item.tier3EEContribution.toString()
+                                                      )
+                                                      if (updatedTier3EEContribution) {
+                                                        const updatedIncomeTaxPayable = prompt(
+                                                          "Enter new income tax payable",
+                                                          item.incomeTaxPayable.toString()
+                                                        )
+                                                        if (updatedIncomeTaxPayable) {
+                                                          const updatedTotalDeductions = prompt(
+                                                            "Enter new total deductions",
+                                                            item.totalDeductions.toString()
+                                                          )
+                                                          if (updatedTotalDeductions) {
+                                                            const updatedNetPay = prompt(
+                                                              "Enter new net pay",
+                                                              item.netPay.toString()
+                                                            )
+                                                            if (updatedNetPay) {
+                                                              updateData(item.id, {
+                                                                serNo: item.serNo,
+                                                                staffNo: updatedStaffNo,
+                                                                tinGhCardNo:
+                                                                  updatedTinGhCardNo,
+                                                                nameOfEmployee:
+                                                                  updatedNameOfEmployee,
+                                                                position: updatedPosition,
+                                                                jobTitle: updatedJobTitle,
+                                                                nationality: updatedNationality,
+                                                                residency: updatedResidency,
+                                                                basicSalary: parseFloat(
+                                                                  updatedBasicSalary
+                                                                ),
+                                                                allowance: parseFloat(
+                                                                  updatedAllowance
+                                                                ),
+                                                                otherBenefits: parseFloat(
+                                                                  updatedOtherBenefits
+                                                                ),
+                                                                grossIncome: parseFloat(
+                                                                  updatedGrossIncome
+                                                                ),
+                                                                secondaryEmployment:
+                                                                  updatedSecondaryEmployment,
+                                                                employeeSSNITContribution:
+                                                                  parseFloat(
+                                                                    updatedEmployeeSSNITContribution
+                                                                  ),
+                                                                tier2Contribution:
+                                                                  parseFloat(
+                                                                    updatedTier2Contribution
+                                                                  ),
+                                                                tier3EEContribution:
+                                                                  parseFloat(
+                                                                    updatedTier3EEContribution
+                                                                  ),
+                                                                incomeTaxPayable:
+                                                                  parseFloat(
+                                                                    updatedIncomeTaxPayable
+                                                                  ),
+                                                                totalDeductions:
+                                                                  parseFloat(
+                                                                    updatedTotalDeductions
+                                                                  ),
+                                                                netPay: parseFloat(
+                                                                  updatedNetPay
+                                                                ),
+                                                              })
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => deleteData(item.id)}>
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default PayrollPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/gra/vat/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { exportKeyValueCSV } from "@/lib/csv"
+
+interface VATData {
+  totalGrossSales: number
+  totalGRALevies: number
+  totalStandardRatedBase: number
+  totalOutputVAT: number
+  totalInputVATFlatBase: number
+  totalInputVATFlat: number
+  totalInputVATStandardBase: number
+  totalInputVATStandard: number
+  totalInputVATZeroBase: number
+  totalInputVATZero: number
+  totalWithholdingCredit: number
+  vatPayable: number
+}
+
+const initialVATData: VATData = {
+  totalGrossSales: 100000,
+  totalGRALevies: 6000,
+  totalStandardRatedBase: 94000,
+  totalOutputVAT: 14100,
+  totalInputVATFlatBase: 5000,
+  totalInputVATFlat: 150,
+  totalInputVATStandardBase: 10000,
+  totalInputVATStandard: 1500,
+  totalInputVATZeroBase: 5000,
+  totalInputVATZero: 0,
+  totalWithholdingCredit: 1000,
+  vatPayable: 11550,
+}
+
+const GRAVATPage = () => {
+  const [vatData, setVatData] = useState<VATData>(initialVATData)
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedData = localStorage.getItem("vatData")
+    if (storedData) {
+      setVatData(JSON.parse(storedData))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("vatData", JSON.stringify(vatData))
+  }, [vatData])
+
+  const handleInputChange = (field: keyof VATData, value: number) => {
+    setVatData({ ...vatData, [field]: value })
+  }
+
+  const handleExport = () => {
+    const reportData = {
+      "Report Type": "Monthly VAT Return",
+      "Generated Date": new Date().toLocaleDateString(),
+      "Total Gross Sales": vatData.totalGrossSales.toFixed(2),
+      "GRA Levies (6%)": vatData.totalGRALevies.toFixed(2),
+      "Standard Rated Base": vatData.totalStandardRatedBase.toFixed(2),
+      "Output VAT (15%)": vatData.totalOutputVAT.toFixed(2),
+      "Input VAT - Flat Rate Base": vatData.totalInputVATFlatBase.toFixed(2),
+      "Input VAT - Flat Rate (3%)": vatData.totalInputVATFlat.toFixed(2),
+      "Input VAT - Standard Base": vatData.totalInputVATStandardBase.toFixed(2),
+      "Input VAT - Standard (15%)": vatData.totalInputVATStandard.toFixed(2),
+      "Input VAT - Zero Rated Base": vatData.totalInputVATZeroBase.toFixed(2),
+      "Input VAT - Zero Rated (0%)": vatData.totalInputVATZero.toFixed(2),
+      "Withholding Tax Credit": vatData.totalWithholdingCredit.toFixed(2),
+      "Total Output VAT": vatData.totalOutputVAT.toFixed(2),
+      "Total Input VAT": vatData.totalInputVAT.toFixed(2),
+      "VAT Payable": vatData.vatPayable.toFixed(2),
+    }
+    exportKeyValueCSV(reportData, `vat-return-${new Date().toISOString().split("T")[0]}.csv`)
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">GRA VAT Return</h1>
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <div></div>
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={handleExport}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>Monthly VAT Return Data</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Description</TableHead>
+              <TableHead>Amount (GHS)</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableCell>Total Gross Sales</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalGrossSales.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalGrossSales",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>GRA Levies (6%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalGRALevies.toString()}
+                  onChange={(e) =>
+                    handleInputChange("totalGRALevies", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Standard Rated Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalStandardRatedBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalStandardRatedBase",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Output VAT (15%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalOutputVAT.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalOutputVAT",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Input VAT - Flat Rate Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalInputVATFlatBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalInputVATFlatBase",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Input VAT - Flat Rate (3%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalInputVATFlat.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalInputVATFlat",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Input VAT - Standard Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalInputVATStandardBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalInputVATStandardBase",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Input VAT - Standard (15%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalInputVATStandard.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalInputVATStandard",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Input VAT - Zero Rated Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalInputVATZeroBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalInputVATZeroBase",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Input VAT - Zero Rated (0%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalInputVATZero.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalInputVATZero",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Withholding Tax Credit</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={vatData.totalWithholdingCredit.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalWithholdingCredit",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell>Total Output VAT</TableCell>
+              <TableCell>{vatData.totalOutputVAT}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Total Input VAT</TableCell>
+              <TableCell>
+                {vatData.totalInputVATFlat + vatData.totalInputVATStandard + vatData.totalInputVATZero}
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>VAT Payable</TableCell>
+              <TableCell>{vatData.vatPayable}</TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default GRAVATPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/gra/levies/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { exportKeyValueCSV } from "@/lib/csv"
+
+interface LeviesData {
+  totalGrossSales: number
+  nhilBase: number
+  nhilLevy: number
+  getfundBase: number
+  getfundLevy: number
+  covidBase: number
+  covidLevy: number
+  totalLevies: number
+}
+
+const initialLeviesData: LeviesData = {
+  totalGrossSales: 100000,
+  nhilBase: 94000,
+  nhilLevy: 2350,
+  getfundBase: 94000,
+  getfundLevy: 2350,
+  covidBase: 94000,
+  covidLevy: 940,
+  totalLevies: 5640,
+}
+
+const GRALeviesPage = () => {
+  const [leviesData, setLeviesData] = useState<LeviesData>(initialLeviesData)
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedData = localStorage.getItem("leviesData")
+    if (storedData) {
+      setLeviesData(JSON.parse(storedData))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("leviesData", JSON.stringify(leviesData))
+  }, [leviesData])
+
+  const handleInputChange = (field: keyof LeviesData, value: number) => {
+    setLeviesData({ ...leviesData, [field]: value })
+  }
+
+  const handleExport = () => {
+    const reportData = {
+      "Report Type": "Monthly GRA Levies Return",
+      "Generated Date": new Date().toLocaleDateString(),
+      "Total Gross Sales": leviesData.totalGrossSales.toFixed(2),
+      "NHIL Base": leviesData.nhilBase.toFixed(2),
+      "NHIL Levy (2.5%)": leviesData.nhilLevy.toFixed(2),
+      "GETFund Base": leviesData.getfundBase.toFixed(2),
+      "GETFund Levy (2.5%)": leviesData.getfundLevy.toFixed(2),
+      "COVID-19 HRL Base": leviesData.covidBase.toFixed(2),
+      "COVID-19 HRL (1%)": leviesData.covidLevy.toFixed(2),
+      "Total Levies Payable": leviesData.totalLevies.toFixed(2),
+    }
+    exportKeyValueCSV(reportData, `gra-levies-return-${new Date().toISOString().split("T")[0]}.csv`)
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">GRA Levies Return</h1>
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <div></div>
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={handleExport}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>Monthly GRA Levies Return Data</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Description</TableHead>
+              <TableHead>Amount (GHS)</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableCell>Total Gross Sales</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.totalGrossSales.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalGrossSales",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>NHIL Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.nhilBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange("nhilBase", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>NHIL Levy (2.5%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.nhilLevy.toString()}
+                  onChange={(e) =>
+                    handleInputChange("nhilLevy", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>GETFund Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.getfundBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange("getfundBase", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>GETFund Levy (2.5%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.getfundLevy.toString()}
+                  onChange={(e) =>
+                    handleInputChange("getfundLevy", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>COVID-19 HRL Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.covidBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange("covidBase", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>COVID-19 HRL (1%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={leviesData.covidLevy.toString()}
+                  onChange={(e) =>
+                    handleInputChange("covidLevy", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell>Total Levies Payable</TableCell>
+              <TableCell>{leviesData.totalLevies}</TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default GRALeviesPage
+\`\`\`
+
+\`\`\`typescript
+// app/dashboard/gta/tourism/page.tsx
+"use client"
+
+import React, { useState, useEffect, useMemo } from "react"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { useToast } from "@/components/ui/use-toast"
+import { format } from "date-fns"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { addDays } from "date-fns"
+import { DateRange } from "react-day-picker"
+import { exportKeyValueCSV } from "@/lib/csv"
+
+interface TourismData {
+  totalGrossSales: number
+  tourismBase: number
+  tourismLevy: number
+  totalPayable: number
+}
+
+const initialTourismData: TourismData = {
+  totalGrossSales: 100000,
+  tourismBase: 94000,
+  tourismLevy: 940,
+  totalPayable: 940,
+}
+
+const GTATourismPage = () => {
+  const [tourismData, setTourismData] = useState<TourismData>(initialTourismData)
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), 0, 1),
+    to: addDays(new Date(), 0),
+  })
+  const { toast } = useToast()
+
+  useEffect(() => {
+    const storedData = localStorage.getItem("tourismData")
+    if (storedData) {
+      setTourismData(JSON.parse(storedData))
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("tourismData", JSON.stringify(tourismData))
+  }, [tourismData])
+
+  const handleInputChange = (field: keyof TourismData, value: number) => {
+    setTourismData({ ...tourismData, [field]: value })
+  }
+
+  const handleExport = () => {
+    const reportData = {
+      "Report Type": "Monthly Tourism Development Levy Return",
+      "Generated Date": new Date().toLocaleDateString(),
+      "Total Gross Sales": tourismData.totalGrossSales.toFixed(2),
+      "Tourism Levy Base": tourismData.tourismBase.toFixed(2),
+      "Tourism Levy (1%)": tourismData.tourismLevy.toFixed(2),
+      "Total Payable to GTA": tourismData.totalPayable.toFixed(2),
+    }
+    exportKeyValueCSV(reportData, `tourism-levy-return-${new Date().toISOString().split("T")[0]}.csv`)
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">GTA Tourism Levy Return</h1>
+      </div>
+
+      <div className="flex justify-between items-center mb-4">
+        <div></div>
+        <div className="flex items-center space-x-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant={"outline"}
+                className={cn(
+                  "justify-start text-left font-normal",
+                  !date?.from && !date?.to ? "text-muted-foreground" : undefined
+                )}
+              >
+                {date?.from && date?.to ? (
+                  <>
+                    {format(date.from, "PPP")} - {format(date.to, "PPP")}
+                  </>
+                ) : (
+                  <span>Pick a date</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="range"
+                defaultMonth={date?.from}
+                selected={date}
+                onSelect={setDate}
+                numberOfMonths={2}
+                pagedNavigation
+              />
+            </PopoverContent>
+          </Popover>
+          <Button onClick={handleExport}>Export to CSV</Button>
+        </div>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableCaption>Monthly Tourism Development Levy Return Data</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Description</TableHead>
+              <TableHead>Amount (GHS)</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableCell>Total Gross Sales</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={tourismData.totalGrossSales.toString()}
+                  onChange={(e) =>
+                    handleInputChange(
+                      "totalGrossSales",
+                      parseFloat(e.target.value)
+                    )
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Tourism Levy Base</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={tourismData.tourismBase.toString()}
+                  onChange={(e) =>
+                    handleInputChange("tourismBase", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>Tourism Levy (1%)</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  value={tourismData.tourismLevy.toString()}
+                  onChange={(e) =>
+                    handleInputChange("tourismLevy", parseFloat(e.target.value))
+                  }
+                />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell>Total Payable to GTA</TableCell>
+              <TableCell>{tourismData.totalPayable}</TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+export default GTATourismPage
+\`\`\`
